@@ -27,13 +27,14 @@ import pandas as pd
 from matplotlib import pyplot as plt
 import seaborn as sns
 from sklearn.manifold import TSNE
-
+import itertools
 
 logger = logging.getLogger(__name__)
 
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""
+
     def __init__(self):
         self.reset()
 
@@ -86,7 +87,7 @@ def setup(args):
 
 def count_parameters(model):
     params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    return params/1000000
+    return params / 1000000
 
 
 def set_seed(args):
@@ -168,11 +169,12 @@ def valid(args, model, writer, test_loader, global_step):
     # Compute confusion matrix
     cf_matrix = confusion_matrix(y_true, y_pred)
     num_classes = list(set(y_true))
-    df_cm = pd.DataFrame(cf_matrix / np.sum(cf_matrix) * 10, index=[i for i in range(len(num_classes))],
-                         columns=[i for i in range(len(num_classes))])
-    plt.figure(figsize=(12, 7))
-    sns.heatmap(df_cm, annot=True)
-    plt.savefig(os.path.join("logs", args.name, 'confusion_matrix.png'))
+    plot_confusion_matrix(cf_matrix, normalize=True, target_names=num_classes, title='Confusion Matrix')
+    # df_cm = pd.DataFrame(cf_matrix / np.sum(cf_matrix) * 10, index=[i for i in range(len(num_classes))],
+    #                      columns=[i for i in range(len(num_classes))])
+    # plt.figure(figsize=(12, 7))
+    # sns.heatmap(df_cm, annot=True)
+    # plt.savefig(os.path.join("logs", args.name, 'confusion_matrix.png'))
 
     # t-SNE plot
     tsne = TSNE(n_components=2).fit_transform(features)
@@ -210,7 +212,7 @@ def train(args, model):
         model, optimizer = amp.initialize(models=model,
                                           optimizers=optimizer,
                                           opt_level=args.fp16_opt_level)
-        amp._amp_state.loss_scalers[0]._loss_scale = 2**20
+        amp._amp_state.loss_scalers[0]._loss_scale = 2 ** 20
 
     # Distributed training
     if args.local_rank != -1:
@@ -250,7 +252,7 @@ def train(args, model):
                 loss.backward()
 
             if (step + 1) % args.gradient_accumulation_steps == 0:
-                losses.update(loss.item()*args.gradient_accumulation_steps)
+                losses.update(loss.item() * args.gradient_accumulation_steps)
                 if args.fp16:
                     torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
                 else:
@@ -283,6 +285,87 @@ def train(args, model):
         writer.close()
     logger.info("Best Accuracy: \t%f" % best_acc)
     logger.info("End Training!")
+
+
+def plot_confusion_matrix(cm, target_names, title='Confusion matrix', cmap=None, normalize=True):
+    """
+        given a sklearn confusion matrix (cm), make a nice plot
+
+        Arguments
+        ---------
+        cm: confusion matrix from sklearn.metrics.confusion_matrix
+        target_names: given classification classes such as [0, 1, 2] the class names, for example: ['high', 'medium', 'low']
+        title: the text to display at the top of the matrix
+        cmap: the gradient of the values displayed from matplotlib.pyplot.cm see http://matplotlib.org/examples/color/colormaps_reference.html plt.get_cmap('jet') or plt.cm.Blues
+        normalize: If False, plot the raw numbers If True, plot the proportions
+
+        Usage
+        plot_confusion_matrix(cm = cm, # confusion matrix created by # sklearn.metrics.confusion_matrix normalize = True,
+        # show proportions target_names = y_labels_vals, # list of names of the classes title = best_estimator_name)
+        # title of graph http://scikit-learn.org/stable/auto_examples/model_selection/plot_confusion_matrix.html
+        """
+
+    accuracy = {}
+    for i in ['crema-d', 'ravdess']:
+        accuracy[i] = np.trace(cm[i]) / float(np.sum(cm[i]))
+        # misclass = 1 - accuracy
+
+    if normalize: cm[i] = 100 * cm[i].astype('float') / cm[i].sum(axis=1)[:, np.newaxis]
+
+    if cmap is None: cmap = plt.get_cmap('Blues')
+
+    fig3, ax3 = plt.subplots(1, 2, figsize=(2 * 7, 6))
+    im0 = ax3[0].imshow(cm['crema-d'], interpolation='nearest', cmap=cmap)
+    im1 = ax3[1].imshow(cm['ravdess'], interpolation='nearest', cmap=cmap)
+    # plt.title(title)
+    fig3.colorbar(im0, ax=ax3[0])
+    fig3.colorbar(im1, ax=ax3[1])
+
+    if target_names is not None:
+        tick_marks = np.arange(len(target_names['crema-d']))
+        ax3[0].set_xticks(tick_marks)
+        ax3[0].set_xticklabels(target_names['crema-d'], rotation=45)
+        ax3[0].set_yticks(tick_marks)
+        ax3[0].set_yticklabels(target_names['crema-d'])
+        tick_marks = np.arange(len(target_names['ravdess']))
+        ax3[1].set_xticks(tick_marks)
+        ax3[1].set_xticklabels(target_names['ravdess'], rotation=45)
+        ax3[1].set_yticks(tick_marks)
+        ax3[1].set_yticklabels(target_names['ravdess'])
+
+    thresh = {}
+    for i in ['crema-d', 'ravdess']:
+        thresh[i] = cm[i].max() / 1.5 if normalize else cm[i].max() / 2
+
+    for i, j in itertools.product(range(cm['crema-d'].shape[0]), range(cm['crema-d'].shape[1])):
+        if normalize:
+            ax3[0].text(j, i, "{:0.2f}".format(cm['crema-d'][i, j]), horizontalalignment="center",
+                        color="white" if cm['crema-d'][i, j] > thresh['crema-d'] else "black")
+        else:
+            ax3[0].text(j, i, "{:,}".format(cm['crema-d'][i, j]), horizontalalignment="center",
+                        color="white" if cm['crema-d'][i, j] > thresh['crema-d'] else "black")
+
+    for i, j in itertools.product(range(cm['ravdess'].shape[0]), range(cm['ravdess'].shape[1])):
+        if normalize:
+            ax3[1].text(j, i, "{:0.2f}".format(cm['ravdess'][i, j]), horizontalalignment="center",
+                        color="white" if cm['ravdess'][i, j] > thresh['ravdess'] else "black")
+        else:
+            ax3[1].text(j, i, "{:,}".format(cm['ravdess'][i, j]), horizontalalignment="center",
+                        color="white" if cm['ravdess'][i, j] > thresh['ravdess'] else "black")
+
+    ax3[0].set_ylabel('True label')
+    ax3[0].set_xlabel('Predicted label')
+    # \naccuracy={:0.4f};
+    # misclass={:0.4f}'.format(accuracy, misclass)) ax3[0].set_title('(a)', y=-0.3)
+    fig3.tight_layout()
+
+    ax3[1].set_ylabel('True label')
+    ax3[1].set_xlabel('Predicted label')
+    ax3[1].set_title('(b)', y=-0.3)
+    fig3.tight_layout()
+    fig3.savefig(".//Results//confusionmat.png")
+    # fig3.savefig(".//Results//confusionmat.pdf")
+    plt.show()
 
 
 def main():

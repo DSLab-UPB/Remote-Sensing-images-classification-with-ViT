@@ -169,7 +169,7 @@ def valid(args, model, writer, test_loader, global_step):
     # Compute confusion matrix
     cf_matrix = confusion_matrix(y_true, y_pred)
     num_classes = list(set(y_true))
-    plot_confusion_matrix(cf_matrix, normalize=True, target_names=num_classes, title='Confusion Matrix')
+    plot_confusion_matrix(cf_matrix, normalize=True, target_names=num_classes, title='Confusion Matrix', args=args)
     # df_cm = pd.DataFrame(cf_matrix / np.sum(cf_matrix) * 10, index=[i for i in range(len(num_classes))],
     #                      columns=[i for i in range(len(num_classes))])
     # plt.figure(figsize=(12, 7))
@@ -287,7 +287,7 @@ def train(args, model):
     logger.info("End Training!")
 
 
-def plot_confusion_matrix(cm, target_names, title='Confusion matrix', cmap=None, normalize=True):
+def plot_confusion_matrix(cm, target_names, title='Confusion matrix', cmap=None, normalize=True, args=None):
     """
         given a sklearn confusion matrix (cm), make a nice plot
 
@@ -305,53 +305,36 @@ def plot_confusion_matrix(cm, target_names, title='Confusion matrix', cmap=None,
         # title of graph http://scikit-learn.org/stable/auto_examples/model_selection/plot_confusion_matrix.html
         """
 
-    accuracy = {}
-    for i in ['crema-d', 'ravdess']:
-        accuracy[i] = np.trace(cm[i]) / float(np.sum(cm[i]))
+    accuracy = np.trace(cm) / float(np.sum(cm))
         # misclass = 1 - accuracy
 
-    if normalize: cm[i] = 100 * cm[i].astype('float') / cm[i].sum(axis=1)[:, np.newaxis]
+    if normalize:
+        cm = 100 * cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
 
-    if cmap is None: cmap = plt.get_cmap('Blues')
+    if cmap is None:
+        cmap = plt.get_cmap('Blues')
 
     fig3, ax3 = plt.subplots(1, 2, figsize=(2 * 7, 6))
-    im0 = ax3[0].imshow(cm['crema-d'], interpolation='nearest', cmap=cmap)
-    im1 = ax3[1].imshow(cm['ravdess'], interpolation='nearest', cmap=cmap)
+    im0 = ax3[0].imshow(cm, interpolation='nearest', cmap=cmap)
     # plt.title(title)
     fig3.colorbar(im0, ax=ax3[0])
-    fig3.colorbar(im1, ax=ax3[1])
 
     if target_names is not None:
-        tick_marks = np.arange(len(target_names['crema-d']))
+        tick_marks = np.arange(len(target_names))
         ax3[0].set_xticks(tick_marks)
-        ax3[0].set_xticklabels(target_names['crema-d'], rotation=45)
+        ax3[0].set_xticklabels(target_names, rotation=45)
         ax3[0].set_yticks(tick_marks)
-        ax3[0].set_yticklabels(target_names['crema-d'])
-        tick_marks = np.arange(len(target_names['ravdess']))
-        ax3[1].set_xticks(tick_marks)
-        ax3[1].set_xticklabels(target_names['ravdess'], rotation=45)
-        ax3[1].set_yticks(tick_marks)
-        ax3[1].set_yticklabels(target_names['ravdess'])
+        ax3[0].set_yticklabels(target_names)
 
-    thresh = {}
-    for i in ['crema-d', 'ravdess']:
-        thresh[i] = cm[i].max() / 1.5 if normalize else cm[i].max() / 2
+    thresh = cm.max() / 1.5 if normalize else cm.max() / 2
 
-    for i, j in itertools.product(range(cm['crema-d'].shape[0]), range(cm['crema-d'].shape[1])):
+    for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
         if normalize:
-            ax3[0].text(j, i, "{:0.2f}".format(cm['crema-d'][i, j]), horizontalalignment="center",
-                        color="white" if cm['crema-d'][i, j] > thresh['crema-d'] else "black")
+            ax3[0].text(j, i, "{:0.2f}".format(cm[i, j]), horizontalalignment="center",
+                        color="white" if cm[i, j] > thresh else "black")
         else:
-            ax3[0].text(j, i, "{:,}".format(cm['crema-d'][i, j]), horizontalalignment="center",
-                        color="white" if cm['crema-d'][i, j] > thresh['crema-d'] else "black")
-
-    for i, j in itertools.product(range(cm['ravdess'].shape[0]), range(cm['ravdess'].shape[1])):
-        if normalize:
-            ax3[1].text(j, i, "{:0.2f}".format(cm['ravdess'][i, j]), horizontalalignment="center",
-                        color="white" if cm['ravdess'][i, j] > thresh['ravdess'] else "black")
-        else:
-            ax3[1].text(j, i, "{:,}".format(cm['ravdess'][i, j]), horizontalalignment="center",
-                        color="white" if cm['ravdess'][i, j] > thresh['ravdess'] else "black")
+            ax3[0].text(j, i, "{:,}".format(cm[i, j]), horizontalalignment="center",
+                        color="white" if cm[i, j] > thresh else "black")
 
     ax3[0].set_ylabel('True label')
     ax3[0].set_xlabel('Predicted label')
@@ -359,12 +342,8 @@ def plot_confusion_matrix(cm, target_names, title='Confusion matrix', cmap=None,
     # misclass={:0.4f}'.format(accuracy, misclass)) ax3[0].set_title('(a)', y=-0.3)
     fig3.tight_layout()
 
-    ax3[1].set_ylabel('True label')
-    ax3[1].set_xlabel('Predicted label')
-    ax3[1].set_title('(b)', y=-0.3)
-    fig3.tight_layout()
-    fig3.savefig(".//Results//confusionmat.png")
-    # fig3.savefig(".//Results//confusionmat.pdf")
+    fig3.savefig(os.path.join("logs", args.name, 'confusion_matrix.png'))
+    # fig3.savefig(".//logs//confusionmat.pdf")
     plt.show()
 
 
@@ -392,7 +371,7 @@ def main():
                         help="Total batch size for training.")
     parser.add_argument("--eval_batch_size", default=1, type=int,
                         help="Total batch size for eval.")
-    parser.add_argument("--eval_every", default=1000, type=int,
+    parser.add_argument("--eval_every", default=100, type=int,
                         help="Run prediction on validation set every so many steps."
                              "Will always run one evaluation at the end of training.")
 
@@ -400,7 +379,7 @@ def main():
                         help="The initial learning rate for SGD.")
     parser.add_argument("--weight_decay", default=0, type=float,
                         help="Weight deay if we apply some.")
-    parser.add_argument("--num_steps", default=1000, type=int,
+    parser.add_argument("--num_steps", default=100, type=int,
                         help="Total number of training epochs to perform.")
     parser.add_argument("--decay_type", choices=["cosine", "linear"], default="cosine",
                         help="How to decay the learning rate.")

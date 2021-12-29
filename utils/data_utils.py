@@ -5,7 +5,6 @@ import torch
 from torchvision import transforms, datasets
 from torch.utils.data import DataLoader, RandomSampler, DistributedSampler, SequentialSampler
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -24,25 +23,21 @@ def get_loader(args):
         transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
     ])
 
-    if args.dataset == "cifar10":
-        trainset = datasets.CIFAR10(root="./data",
-                                    train=True,
-                                    download=True,
-                                    transform=transform_train)
-        testset = datasets.CIFAR10(root="./data",
-                                   train=False,
-                                   download=True,
-                                   transform=transform_test) if args.local_rank in [-1, 0] else None
-
+    if args.dataset == "AID":
+        trainset = datasets.ImageFolder(root="/home/antonio/PycharmProjects/ViT-pytorch/AID/train",
+                                        transform=transform_train)
+        testset = datasets.ImageFolder(root="/home/antonio/PycharmProjects/ViT-pytorch/AID/test",
+                                       transform=transform_test) if args.local_rank in [-1, 0] else None
+    elif args.dataset == "UCM":
+        trainset = datasets.ImageFolder(root="/home/antonio/PycharmProjects/ViT-pytorch/UCM-captions/train",
+                                        transform=transform_train)
+        testset = datasets.ImageFolder(root="/home/antonio/PycharmProjects/ViT-pytorch/UCM-captions/test",
+                                       transform=transform_test) if args.local_rank in [-1, 0] else None
     else:
-        trainset = datasets.CIFAR100(root="./data",
-                                     train=True,
-                                     download=True,
-                                     transform=transform_train)
-        testset = datasets.CIFAR100(root="./data",
-                                    train=False,
-                                    download=True,
-                                    transform=transform_test) if args.local_rank in [-1, 0] else None
+        trainset = datasets.ImageFolder(root="/home/antonio/PycharmProjects/ViT-pytorch/Sydney-captions/train",
+                                        transform=transform_train)
+        testset = datasets.ImageFolder(root="/home/antonio/PycharmProjects/ViT-pytorch/Sydney-captions/test",
+                                       transform=transform_test) if args.local_rank in [-1, 0] else None
     if args.local_rank == 0:
         torch.distributed.barrier()
 

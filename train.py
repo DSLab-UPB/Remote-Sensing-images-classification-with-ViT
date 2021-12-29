@@ -22,6 +22,12 @@ from utils.scheduler import WarmupLinearSchedule, WarmupCosineSchedule
 from utils.data_utils import get_loader
 from utils.dist_util import get_world_size
 
+from sklearn.metrics import confusion_matrix
+import pandas as pd
+from matplotlib import pyplot as plt
+import seaborn as sns
+from sklearn.manifold import TSNE
+
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +65,12 @@ def setup(args):
     # Prepare model
     config = CONFIGS[args.model_type]
 
-    num_classes = 10 if args.dataset == "cifar10" else 100
+    if args.dataset == "AID":
+        num_classes = 30
+    elif args.dataset == "UCM":
+        num_classes = 21
+    else:
+        num_classes = 7
 
     model = VisionTransformer(config, args.img_size, zero_head=True, num_classes=num_classes)
     model.load_from(np.load(args.pretrained_dir))
@@ -69,6 +80,7 @@ def setup(args):
     logger.info("{}".format(config))
     logger.info("Training parameters %s", args)
     logger.info("Total Parameter: \t%2.1fM" % num_params)
+    print(num_params)
     return args, model
 
 
@@ -101,16 +113,34 @@ def valid(args, model, writer, test_loader, global_step):
                           dynamic_ncols=True,
                           disable=args.local_rank not in [-1, 0])
     loss_fct = torch.nn.CrossEntropyLoss()
+
+    y_pred = []
+    y_true = []
+    features = None
+    labels = []
+
     for step, batch in enumerate(epoch_iterator):
         batch = tuple(t.to(args.device) for t in batch)
         x, y = batch
         with torch.no_grad():
-            logits = model(x)
+            logits = model(x)[0]
 
             eval_loss = loss_fct(logits, y)
             eval_losses.update(eval_loss.item())
 
             preds = torch.argmax(logits, dim=-1)
+
+            # Prep axes of  confusion matrix
+            y_pred.extend(preds.data.cpu().numpy())
+            y_true.extend(y.data.cpu().numpy())
+
+            # Prep features for t-SNE plot
+            outputs = model.forward(x)[0]
+            current_features = outputs.cpu().numpy()
+            if features is not None:
+                features = np.concatenate((features, current_features))
+            else:
+                features = current_features
 
         if len(all_preds) == 0:
             all_preds.append(preds.detach().cpu().numpy())
@@ -134,6 +164,23 @@ def valid(args, model, writer, test_loader, global_step):
     logger.info("Valid Accuracy: %2.5f" % accuracy)
 
     writer.add_scalar("test/accuracy", scalar_value=accuracy, global_step=global_step)
+
+    # Compute confusion matrix
+    cf_matrix = confusion_matrix(y_true, y_pred)
+    num_classes = list(set(y_true))
+    df_cm = pd.DataFrame(cf_matrix / np.sum(cf_matrix) * 10, index=[i for i in range(len(num_classes))],
+                         columns=[i for i in range(len(num_classes))])
+    plt.figure(figsize=(12, 7))
+    sns.heatmap(df_cm, annot=True)
+    plt.savefig(os.path.join("logs", args.name, 'confusion_matrix.png'))
+
+    # t-SNE plot
+    tsne = TSNE(n_components=2).fit_transform(features)
+    palette = sns.color_palette("viridis", len(num_classes))
+
+    plt.figure()
+    sns.scatterplot(tsne[:, 0], tsne[:, 1], hue=y_true, legend='full', palette=palette)
+    plt.savefig(os.path.join("logs", args.name, 't-SNE plot.png'))
     return accuracy
 
 
@@ -239,13 +286,17 @@ def train(args, model):
 
 
 def main():
+    torch.cuda.empty_cache()
     parser = argparse.ArgumentParser()
+
     # Required parameters
     parser.add_argument("--name", required=True,
                         help="Name of this run. Used for monitoring.")
-    parser.add_argument("--dataset", choices=["cifar10", "cifar100"], default="cifar10",
+    parser.add_argument("--dataset", choices=["AID", "UCM", "Sydney"], default="Sydney",
                         help="Which downstream task.")
-    parser.add_argument("--model_type", type=str, default="ViT-B_16",
+    parser.add_argument("--model_type", choices=["ViT-B_16", "ViT-B_32", "ViT-L_16",
+                                                 "ViT-L_32", "ViT-H_14", "R50-ViT-B_16"],
+                        default="ViT-B_16",
                         help="Which variant to use.")
     parser.add_argument("--pretrained_dir", type=str, default="checkpoint/ViT-B_16.npz",
                         help="Where to search for pretrained ViT models.")
@@ -254,11 +305,11 @@ def main():
 
     parser.add_argument("--img_size", default=224, type=int,
                         help="Resolution size")
-    parser.add_argument("--train_batch_size", default=512, type=int,
+    parser.add_argument("--train_batch_size", default=10, type=int,
                         help="Total batch size for training.")
-    parser.add_argument("--eval_batch_size", default=64, type=int,
+    parser.add_argument("--eval_batch_size", default=1, type=int,
                         help="Total batch size for eval.")
-    parser.add_argument("--eval_every", default=100, type=int,
+    parser.add_argument("--eval_every", default=1000, type=int,
                         help="Run prediction on validation set every so many steps."
                              "Will always run one evaluation at the end of training.")
 
@@ -266,11 +317,11 @@ def main():
                         help="The initial learning rate for SGD.")
     parser.add_argument("--weight_decay", default=0, type=float,
                         help="Weight deay if we apply some.")
-    parser.add_argument("--num_steps", default=500, type=int,
+    parser.add_argument("--num_steps", default=1000, type=int,
                         help="Total number of training epochs to perform.")
     parser.add_argument("--decay_type", choices=["cosine", "linear"], default="cosine",
                         help="How to decay the learning rate.")
-    parser.add_argument("--warmup_steps", default=100, type=int,
+    parser.add_argument("--warmup_steps", default=0, type=int,
                         help="Step of training to perform learning rate warmup for.")
     parser.add_argument("--max_grad_norm", default=1.0, type=float,
                         help="Max gradient norm.")
@@ -295,6 +346,7 @@ def main():
     # Setup CUDA, GPU & distributed training
     if args.local_rank == -1:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # device = torch.device("cpu")
         args.n_gpu = torch.cuda.device_count()
     else:  # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
         torch.cuda.set_device(args.local_rank)
@@ -318,6 +370,7 @@ def main():
     args, model = setup(args)
 
     # Training
+    # print(torch.cuda.memory_summary(device="cuda", abbreviated=False))
     train(args, model)
 
 

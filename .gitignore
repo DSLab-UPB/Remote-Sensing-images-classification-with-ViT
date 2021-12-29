@@ -143,3 +143,12 @@ cython_debug/
 !/data/
 !/logs/
 !/output/
+.idea
+
+
+# Datasets
+/AID/
+/UCM-captions/
+/Sydney-captions/
+/output/
+/checkpoint/
